@@ -15,8 +15,12 @@ Usage:
 """
 import re
 
-from guard import analyze
-from llm import LLMError, chat_json
+try:  # imported as a package from the repo root (app/pipeline.py)
+    from .guard import analyze
+    from .llm import LLMError, chat_json
+except ImportError:  # run from inside this folder: python classifier.py "..."
+    from guard import analyze
+    from llm import LLMError, chat_json
 
 CATEGORIES = ["Network", "Access", "Software", "Hardware", "Email", "Other"]
 PRIORITIES = ["Low", "Medium", "High", "Critical"]
@@ -63,7 +67,7 @@ CATEGORY_KEYWORDS = {
         (r"\bvpn\b", 3), (r"wi-?fi", 3), (r"\binternet\b", 2), (r"\bnetwork\b", 2),
         (r"\bdns\b", 2), (r"ethernet|\blan\b|router|proxy|bandwidth", 2),
         (r"internal (?:sites?|websites?|portal)", 2), (r"disconnect", 1), (r"\bconnect", 1),
-        (r"pages? (?:take|load|loading)", 1),
+        (r"pages? (?:take|load|loading)", 1), (r"globalprotect|anyconnect|forticlient", 4),
     ],
     "Access": [
         (r"password", 2), (r"(?:changed|reset|forgot) my password", 2), (r"log ?in|sign ?in|logon", 1.5),
@@ -75,17 +79,22 @@ CATEGORY_KEYWORDS = {
         (r"excel|word|powerpoint|adobe|acrobat|python|chrome|sap|crm|zoom", 2),
         (r"\berror\b|\b50[0-9]\b", 1), (r"update|upgrade", 1),
         (r"ransom|encrypted|malware|virus|pop-?up", 3),
+        (r"tableau|company portal|software center|jira|slack|vs ?code", 2),
     ],
     "Hardware": [
         (r"laptop", 0.5), (r"battery|charger|charging", 3), (r"screen|monitor|display", 2),
         (r"keyboard|mouse|trackpad|headset", 2), (r"printer|paper jam|toner", 3),
         (r"dock(?:ing)?", 3), (r"\bhot\b|overheat", 2), (r"smoke|burning|sparks?", 3),
-        (r"flicker", 2), (r"hardware|broken|cracked", 2),
+        (r"flicker", 2), (r"hardware|broken|cracked", 2), (r"bitlocker|recovery key|\bbios\b", 3),
     ],
     "Email": [
         (r"e-?mails?\b", 2), (r"outlook", 2), (r"mailbox|inbox|webmail", 2), (r"calendar|meeting invite", 1.5),
         (r"attachment", 1), (r"spam|phish", 2), (r"(?:link|attachment) in (?:an|the|a) e-?mail", 3),
         (r"\bteams\b", 0.5),
+    ],
+    "Other": [  # facilities / HR topics IT does not own
+        (r"air ?con(?:ditioning|ditioner)?|\bhvac\b|facilities|parking|canteen|cafeteria|\bchair\b|\bdesk\b", 5),
+        (r"payroll|salary|\bleave\b|reimburse|\bhr policy\b", 4),
     ],
 }
 CATEGORY_KEYWORDS_RE = {

@@ -8,11 +8,16 @@ Hackathon prototype. Takes an IT support ticket in plain English and:
 4. **Escalates** to a human with an auto-written handoff summary when confidence is low.
 
 ```
-ticket ──► classify_ticket() ──────────────────────────┐
-   │                                                   ▼
-   └────► retrieve(k=4) ──► answer_from_context() ──► confidence_gate() ──► JSON
-                                                       │ escalate?
-                                                       └──► handoff_summary()
+ticket ──► ticket_understanding.classify()   Person 2: guard (mask PII, injection, security)
+             │                                         + category / priority / confidence
+             ▼  clean_text (PII masked)
+           rag.retrieve(k=4)                  Person 1: top-k KB chunks with scores
+             │
+             ▼
+           agent.gate.resolve()               Person 3: grounded answer, citation check,
+             │                                         confidence gate, handoff summary
+             ▼
+           JSON  (answer, or escalate + handoff_summary)
 ```
 
 ## Quick start
@@ -79,8 +84,10 @@ When retrieval is below the threshold the answer step is skipped, because there 
 |---|---|---|
 | `rag/store.py` | RAG | Load `data/kb/*.md`, split by `##` section, embed, FAISS search. `retrieve(query, k)` returns `[{text, source, heading, score}]`. |
 | `agent/llm.py` | Agent | `llm(prompt)` provider wrapper. |
-| `agent/core.py` | Agent | `classify_ticket()`, `answer_from_context()`, `confidence_gate()`, `handoff_summary()` and their prompts. |
-| `app/pipeline.py` | App | Wires rag + agent into the JSON contract. |
+| `agent/core.py` | Agent | Original `classify_ticket()`, `answer_from_context()`, `confidence_gate()`, `handoff_summary()`. Superseded in the pipeline by the modules below; kept for `eval/eval_answer_gate.py` and comparison. |
+| `ticket_understanding/` | Person 2 | Guard (PII masking, prompt-injection and security detection) + classifier (LLM with keyword fallback). See its README. |
+| `agent/answerer.py`, `agent/gate.py` | Person 3 | Grounded answer with citation checks, escalation rules, confidence, handoff summary. |
+| `app/pipeline.py` | App | Wires Person 2 → Person 1 → Person 3 into the JSON contract. |
 | `app/streamlit_app.py` | App | UI: ticket input, category/priority/confidence, answer, sources, retrieved chunks, escalation and handoff. |
 | `data/kb/` | – | 12 IT FAQ/SOP docs (VPN, password reset, lockout, MFA, software, Wi-Fi, Outlook, Teams, printing, laptop, hardware requests, shared drives). |
 | `data/tickets.json` | – | 25 labelled tickets: 20 in scope, 5 out of scope (payroll, facilities, security incident, production access, legal). |
@@ -88,7 +95,7 @@ When retrieval is below the threshold the answer step is skipped, because there 
 
 Categories: `Network`, `Account & Access`, `Software`, `Email & Collaboration`, `Hardware`, `Other`.
 
-## Baseline results (offline mode, threshold 0.30)
+## Baseline results (original pipeline, before integration; offline mode, threshold 0.30)
 
 Run `python -m eval.run_eval` with an API key to get the LLM numbers.
 
@@ -137,6 +144,21 @@ Tests (no API key or embedding model needed) and evaluation on the 25 labelled t
 python -m pytest tests -q
 python -m eval.eval_answer_gate
 ```
+
+## Integrated pipeline (all three modules)
+
+`app/pipeline.py` now runs one ticket through all three modules, so the UI and `eval/run_eval.py` use them automatically:
+
+1. **Person 2** `ticket_understanding.classify()` masks emails, phone numbers and passwords, detects prompt injection and security incidents, and returns category, priority (`Low/Medium/High/Critical`) and confidence. Its short labels are mapped to the team's (`Access` → `Account & Access`, `Email` → `Email & Collaboration`).
+2. **Person 1** `rag.retrieve()` searches the KB using the masked text.
+3. **Person 3** `agent.gate.resolve()` answers from the chunks, checks citations and decides answer vs escalate. Security and injection tickets never reach the answer prompt.
+4. If Person 2's guard says `must_escalate` (e.g. a login from another country) but the gate would have answered, the pipeline escalates anyway and writes the handoff note.
+
+Only the PII-masked text is sent to retrieval and to any LLM.
+
+**One LLM provider for everything.** `ticket_understanding/llm.py` defers to `agent/llm.py` unless `LLM_PROVIDER` is set to one of its own providers, so the classifier and the answerer use the same model. `agent/llm.py` now also supports Groq (`GROQ_API_KEY`, free tier).
+
+Offline check on `data/tickets.json`: category accuracy 23/25, same as the original classifier. The two differences are labelling choices to agree on as a team: ticket 23 (phishing) and 24 (production DB access) are labelled `Other`, while the new classifier says `Email & Collaboration` and `Account & Access`. Both still escalate. Re-run `python -m eval.run_eval` with the real retriever and an API key for the final numbers.
 
 ## Ideas for next steps
 

@@ -5,7 +5,10 @@ All three providers expose an OpenAI-compatible chat endpoint, so we use the
 `openai` SDK with a different base_url per provider. One code path, three providers.
 
 Config (environment variables):
-    LLM_PROVIDER   groq | gemini | openai | mock     (default: groq)
+    LLM_PROVIDER   groq | gemini | openai | mock
+                   If unset (or set to a provider not listed here, e.g. anthropic) and
+                   this runs inside the full app, calls go through agent/llm.py so the
+                   whole pipeline uses one provider. Standalone, the default is groq.
     LLM_MODEL      optional model override
     GROQ_API_KEY / GEMINI_API_KEY / OPENAI_API_KEY
     LLM_TIMEOUT    seconds, default 20
@@ -50,18 +53,33 @@ _client = None
 
 
 def provider() -> str:
-    return os.getenv("LLM_PROVIDER", "groq").strip().lower()
+    return os.getenv("LLM_PROVIDER", "").strip().lower()
 
 
 def model_name() -> str:
-    return os.getenv("LLM_MODEL") or PROVIDERS.get(provider(), {}).get("model", "")
+    return os.getenv("LLM_MODEL") or PROVIDERS.get(provider() or "groq", {}).get("model", "")
+
+
+def _own_provider_ready() -> bool:
+    """True when LLM_PROVIDER names one of our providers and its key is set."""
+    p = provider()
+    return p in PROVIDERS and bool(os.getenv(PROVIDERS[p]["key_env"]))
+
+
+def _team_llm():
+    """The repo-wide wrapper agent/llm.py, if we are running inside the full app."""
+    try:
+        from agent.llm import llm as team_llm
+    except ImportError:
+        return None
+    return team_llm
 
 
 def _get_client():
     global _client
     if _client is not None:
         return _client
-    p = provider()
+    p = provider() or "groq"
     if p not in PROVIDERS:
         raise LLMError(f"Unknown LLM_PROVIDER '{p}'. Use one of: {', '.join(PROVIDERS)} or mock.")
     cfg = PROVIDERS[p]
@@ -85,6 +103,14 @@ def chat(system: str, user: str, *, json_mode: bool = False, max_tokens: int = 8
     """Single chat completion at temperature 0. Returns the raw text."""
     if provider() == "mock":
         raise LLMError("mock provider: LLM disabled")
+    if not _own_provider_ready():
+        # Inside the full app: use the same provider/model as the rest of the pipeline.
+        team_llm = _team_llm()
+        if team_llm is not None:
+            try:
+                return (team_llm(f"{system}\n\n{user}") or "").strip()
+            except Exception as e:  # LLMUnavailable (no key), network errors, ...
+                raise LLMError(f"{type(e).__name__}: {e}") from e
     client = _get_client()
     kwargs = dict(
         model=model_name(),

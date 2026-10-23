@@ -1,6 +1,6 @@
 """One small wrapper around the LLM so the provider can be swapped.
 
-Pick the provider with LLM_PROVIDER (anthropic | openai | gemini) or let it
+Pick the provider with LLM_PROVIDER (anthropic | openai | gemini | groq) or let it
 be auto-detected from whichever API key is set. Override the model with
 LLM_MODEL. If no key is configured, llm() raises LLMUnavailable and the
 agent falls back to simple offline heuristics so the demo still runs.
@@ -16,11 +16,13 @@ DEFAULT_MODELS = {
     "anthropic": "claude-opus-5-5",
     "openai": "gpt-4o-mini",
     "gemini": "gemini-2.0-flash",
+    "groq": "llama-3.3-70b-versatile",
 }
 KEY_VARS = {
     "anthropic": ["ANTHROPIC_API_KEY"],
     "openai": ["OPENAI_API_KEY"],
     "gemini": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+    "groq": ["GROQ_API_KEY"],
 }
 
 
@@ -78,5 +80,16 @@ def llm(prompt: str) -> str:
         api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
         response = genai.Client(api_key=api_key).models.generate_content(model=model, contents=prompt)
         return (response.text or "").strip()
+
+    if provider == "groq":  # OpenAI-compatible endpoint, free tier
+        from openai import OpenAI
+
+        client = OpenAI(api_key=os.getenv("GROQ_API_KEY"), base_url="https://api.groq.com/openai/v1")
+        response = client.chat.completions.create(
+            model=model,
+            temperature=0,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return (response.choices[0].message.content or "").strip()
 
     raise LLMUnavailable(f"Unknown LLM_PROVIDER: {provider}")

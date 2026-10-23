@@ -39,7 +39,8 @@ with st.sidebar:
         st.warning("No LLM API key found. Running in **offline mode** (keyword classifier, extractive answers).")
     threshold = st.slider("Retrieval threshold", 0.0, 1.0, RETRIEVAL_THRESHOLD, 0.01,
                           help="Escalate when the best KB match scores below this cosine similarity.")
-    st.caption("Escalation rule: top retrieval score < threshold OR the model returns NOT_FOUND.")
+    st.caption("Escalates on: security incident, prompt injection, privileged access or out-of-scope ticket; "
+               "top retrieval score < threshold; the KB doesn't answer it; bad citations; or confidence < 0.45.")
 
 # ---------------------------------------------------------------- input
 st.title("🛠️ AI Copilot for Enterprise IT Helpdesk")
