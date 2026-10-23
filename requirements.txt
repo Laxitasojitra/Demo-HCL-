@@ -1,0 +1,9 @@
+streamlit>=1.40
+sentence-transformers>=3.0
+faiss-cpu>=1.8
+numpy
+python-dotenv
+# LLM providers: install the one you use
+anthropic
+openai
+google-genai
