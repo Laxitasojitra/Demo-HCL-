@@ -180,6 +180,50 @@ def test_decide_escalates_on_hard_rule_even_with_good_answer():
     assert d["escalate"] and "security_incident" in d["flags"]
 
 
+# ---------------------------------------------------------------- Person 2's classify() output
+
+P2_CLS = {"category": "Network", "priority": "Medium", "confidence": 0.9, "clean_text": "VPN drops, call me on [PHONE]",
+          "injection": False, "security_incident": False, "must_escalate": False, "escalate_reasons": []}
+
+
+def test_person2_confidence_key_is_used():
+    low = decide("vpn", VPN_CHUNKS, _answer(), {**P2_CLS, "confidence": 0.0})
+    high = decide("vpn", VPN_CHUNKS, _answer(), {**P2_CLS, "confidence": 1.0})
+    assert high["confidence"] > low["confidence"]
+
+
+def test_person2_must_escalate_is_honoured():
+    cls = {**P2_CLS, "must_escalate": True, "escalate_reasons": ["critical priority"]}
+    d = decide("vpn", VPN_CHUNKS, _answer(), cls)
+    assert d["escalate"] and "classifier_must_escalate" in d["flags"]
+    assert any("critical priority" in r for r in d["reasons"])
+
+
+def test_person2_guard_flags_are_honoured():
+    d = decide("hello", VPN_CHUNKS, _answer(), {**P2_CLS, "injection": True, "must_escalate": True})
+    assert d["escalate"] and d["flags"] == ["prompt_injection"]
+    d = decide("hello", VPN_CHUNKS, _answer(), {**P2_CLS, "security_incident": True, "must_escalate": True})
+    assert d["escalate"] and d["flags"] == ["security_incident"]
+
+
+def test_person2_critical_priority_escalates():
+    d = decide("vpn", VPN_CHUNKS, _answer(), {**P2_CLS, "priority": "Critical"})
+    assert d["escalate"] and "priority_critical" in d["flags"]
+
+
+def test_resolve_sends_masked_text_to_llm():
+    prompts = []
+
+    def spy(prompt):
+        prompts.append(prompt)
+        return good_reply()
+
+    out = resolve("VPN drops, call me on 9876543210", VPN_CHUNKS, P2_CLS, llm_fn=spy)
+    assert not out["escalate"]
+    assert prompts and all("9876543210" not in p for p in prompts)
+    assert "[PHONE]" in prompts[0]
+
+
 # ---------------------------------------------------------------- handoff + resolve
 
 def test_handoff_fallback_has_three_lines():

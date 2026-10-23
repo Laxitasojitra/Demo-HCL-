@@ -63,6 +63,7 @@ FLAG_REASONS = {
     "out_of_scope": "topic is outside the IT knowledge base (HR, payroll, facilities or legal)",
     "category_other": "classifier put the ticket in category 'Other' (not an IT KB topic)",
     "priority_critical": "priority is Critical",
+    "classifier_must_escalate": "ticket understanding module asked for escalation",
 }
 
 NEXT_STEPS = {
@@ -76,15 +77,36 @@ NEXT_STEPS = {
 
 
 def detect_flags(ticket, classification=None):
-    """Return the list of hard-rule flags that fire for this ticket (may be empty)."""
+    """Return the list of hard-rule flags that fire for this ticket (may be empty).
+
+    Accepts the output of either classifier: agent.core.classify_ticket()
+    ({"category", "priority"}) or Person 2's ticket_understanding.classify(),
+    whose "injection", "security_incident" and "must_escalate" fields are honoured.
+    """
     text = (ticket or "").lower()
     flags = [name for name, patterns in HARD_RULES.items() if any(re.search(p, text) for p in patterns)]
     classification = classification or {}
+    if classification.get("injection") and "prompt_injection" not in flags:
+        flags.append("prompt_injection")
+    if classification.get("security_incident") and "security_incident" not in flags:
+        flags.append("security_incident")
     if classification.get("category") == "Other" and "out_of_scope" not in flags:
         flags.append("category_other")
     if str(classification.get("priority", "")).lower() == "critical":
         flags.append("priority_critical")
+    if classification.get("must_escalate") and not flags:
+        flags.append("classifier_must_escalate")
     return flags
+
+
+def classifier_confidence(classification):
+    """Person 2 returns "confidence"; older code may pass "cls_confidence". None if absent."""
+    classification = classification or {}
+    value = classification.get("cls_confidence", classification.get("confidence"))
+    try:
+        return None if value is None else float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 # ---------------------------------------------------------------- confidence
@@ -125,10 +147,14 @@ def decide(ticket, chunks, answer_result, classification=None,
     classification = classification or {}
     top_score = chunks[0]["score"] if chunks else 0.0
     confidence = compute_confidence(top_score, answer_result.get("answerable", False),
-                                    classification.get("cls_confidence"))
+                                    classifier_confidence(classification))
 
     flags = detect_flags(ticket, classification)
     reasons = [FLAG_REASONS[f] for f in flags]
+    if "classifier_must_escalate" in flags and classification.get("escalate_reasons"):
+        reasons[flags.index("classifier_must_escalate")] = (
+            "ticket understanding module asked for escalation: " + ", ".join(classification["escalate_reasons"])
+        )
     if not answer_result.get("llm_ok", True):
         reasons.append(f"LLM step failed ({answer_result.get('error') or 'no valid reply'})")
     if top_score < threshold:
@@ -232,13 +258,17 @@ def resolve(ticket, chunks, classification=None, llm_fn=None,
     """
     from agent.answerer import generate_answer  # local import keeps gate usable on its own
 
+    classification = classification or {}
+    # Person 2's guard masks emails, phones and passwords; only that text goes to an LLM.
+    llm_text = classification.get("clean_text") or ticket
+
     flags = detect_flags(ticket, classification)
     if "prompt_injection" in flags or "security_incident" in flags:
         # Never send these to the answer prompt; escalate straight away.
         answer_result = {"answer": "NOT_FOUND", "sources": [], "answerable": False,
                          "invalid_citations": [], "llm_ok": True, "mode": "skipped", "error": None}
     else:
-        answer_result = generate_answer(ticket, chunks, llm_fn=llm_fn)
+        answer_result = generate_answer(llm_text, chunks, llm_fn=llm_fn)
 
     decision = decide(ticket, chunks, answer_result, classification, threshold, min_confidence)
     if decision["escalate"]:
@@ -247,7 +277,7 @@ def resolve(ticket, chunks, classification=None, llm_fn=None,
             "sources": [],
             "confidence": decision["confidence"],
             "escalate": True,
-            "handoff_summary": handoff_summary(ticket, classification, decision, chunks, llm_fn=llm_fn),
+            "handoff_summary": handoff_summary(llm_text, classification, decision, chunks, llm_fn=llm_fn),
             "reasons": decision["reasons"],
             "flags": decision["flags"],
         }
