@@ -7,3 +7,5 @@ python-dotenv
 anthropic
 openai
 google-genai
+# tests
+pytest

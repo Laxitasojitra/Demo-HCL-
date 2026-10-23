@@ -4,3 +4,5 @@ __pycache__/
 .venv/
 venv/
 eval/results.csv
+eval/answer_gate_results.csv
+.pytest_cache/

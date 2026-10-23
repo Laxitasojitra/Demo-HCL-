@@ -100,6 +100,44 @@ Run `python -m eval.run_eval` with an API key to get the LLM numbers.
 
 The hard case is ticket 23 (credentials typed into a phishing page). It retrieves well-matching KB text about phishing and passwords, so the retrieval gate doesn't fire. Only the LLM's `NOT_FOUND` judgement can catch it. Note that the 0.30 threshold was picked on these same 25 tickets, so treat the numbers as optimistic.
 
+## Person 3: answer generation and escalation (`agent/answerer.py`, `agent/gate.py`)
+
+A stricter answer + escalation layer that sits on top of Person 1's `retrieve()` output. It does not change `agent/core.py` or `app/pipeline.py`; wiring it in is a separate step.
+
+| Function | What it does |
+|---|---|
+| `generate_answer(ticket, chunks)` | Strict-JSON prompt: answer only from the chunks, cite `[file.md]` after each step, return `answerable`. Retries once on bad JSON; offline mode returns the top chunk. Every cited file is checked against the retrieved files, and made-up ones go to `invalid_citations`. |
+| `decide(ticket, chunks, answer_result, classification)` | Code decides answer vs escalate. Returns `confidence`, `escalate`, `reasons`, `flags`. |
+| `handoff_summary(ticket, classification, decision, chunks)` | 3-line note: `Issue:` / `Triage:` / `Reason escalated: ... Next step: ...`. LLM when available, template otherwise. |
+| `resolve(ticket, chunks, classification)` | One call: answer, gate, handoff. Returns `answer, sources, confidence, escalate, handoff_summary, reasons, flags`. |
+
+**Escalate if any of these is true:**
+
+1. Hard rule on the ticket: security incident (phishing, typed password on a fake page, malware), prompt injection, privileged/production access, out-of-scope topic (payroll, facilities, legal), or category `Other` / priority `Critical`. Security and injection tickets are never sent to the answer prompt.
+2. The LLM failed or returned invalid JSON twice.
+3. Top retrieval score below `0.30`.
+4. The model says the context does not answer the ticket.
+5. The answer cites a file that was not retrieved, or cites nothing.
+6. Confidence below `0.45`.
+
+**Confidence** = `0.6 × retrieval + 0.2 × classifier confidence + 0.2 × answerable`, where retrieval maps the cosine score onto 0–1 (0.15 → 0, 0.65 → 1). If the classifier returns no confidence, it becomes `0.75 × retrieval + 0.25 × answerable`. Not-answerable results are capped at 0.3.
+
+```python
+from rag import retrieve
+from agent import classify_ticket
+from agent.gate import resolve
+
+ticket = "My VPN says gateway unreachable at the hotel"
+out = resolve(ticket, retrieve(ticket, 4), classify_ticket(ticket))
+```
+
+Tests (no API key or embedding model needed) and evaluation on the 25 labelled tickets:
+
+```bash
+python -m pytest tests -q
+python -m eval.eval_answer_gate
+```
+
 ## Ideas for next steps
 
 - Also escalate on `category == "Other"` or on security keywords.
